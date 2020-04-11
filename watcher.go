@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"runtime"
 	"sync"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	_ "gocloud.dev/pubsub/rabbitpubsub"
 )
 
+// check interface compatibility
 var _ persist.Watcher = &Watcher{}
 
 // Errors
@@ -27,23 +30,27 @@ var (
 )
 
 type Watcher struct {
-	opts         *Options
+	url          string
 	callbackFunc func(string)
-	connMu       sync.RWMutex
+	connMu       *sync.RWMutex
 	ctx          context.Context
 	topic        *pubsub.Topic
 	sub          *pubsub.Subscription
 }
 
-type Options struct {
-	URL string // gcppubsub://myproject/mytopic
-}
-
 // New creates a new watcher  https://gocloud.dev/concepts/urls/
-func New(opts *Options) *Watcher {
-	return &Watcher{
-		opts: opts,
+// gcppubsub://myproject/mytopic
+func New(ctx context.Context, url string) (*Watcher, error) {
+	w := &Watcher{
+		url:    url,
+		connMu: &sync.RWMutex{},
 	}
+
+	runtime.SetFinalizer(w, finalizer)
+
+	err := w.initializeConnections(ctx)
+
+	return w, err
 }
 
 // SetUpdateCallback sets the callback function that the watcher will call
@@ -56,32 +63,36 @@ func (w *Watcher) SetUpdateCallback(callbackFunc func(string)) error {
 	return nil
 }
 
-func (w *Watcher) Connect(ctx context.Context) error {
+func (w *Watcher) initializeConnections(ctx context.Context) error {
 	w.connMu.Lock()
 	defer w.connMu.Unlock()
 	w.ctx = ctx
-	topic, err := pubsub.OpenTopic(ctx, w.opts.URL)
+	topic, err := pubsub.OpenTopic(ctx, w.url)
 	if err != nil {
 		return err
 	}
 	w.topic = topic
 
-	return nil
+	return w.subscribeToUpdates(ctx)
 }
 
 func (w *Watcher) subscribeToUpdates(ctx context.Context) error {
-	sub, err := pubsub.OpenSubscription(ctx, w.opts.URL)
+	sub, err := pubsub.OpenSubscription(ctx, w.url)
 	if err != nil {
 		return fmt.Errorf("failed to open updates subscription, error: %w", err)
 	}
 	w.sub = sub
-	for {
-		msg, err := sub.Receive(ctx)
-		if err != nil {
-			return err
+	go func() {
+		for {
+			msg, err := sub.Receive(ctx)
+			if err != nil {
+				log.Printf("Error while receiving an update message: %s\n", err)
+				return
+			}
+			w.executeCallback(msg)
 		}
-		w.executeCallback(msg)
-	}
+	}()
+	return nil
 }
 
 func (w *Watcher) executeCallback(msg *pubsub.Message) {
@@ -90,13 +101,6 @@ func (w *Watcher) executeCallback(msg *pubsub.Message) {
 	if w.callbackFunc != nil {
 		go w.callbackFunc(string(msg.Body))
 	}
-}
-
-func (w *Watcher) Close() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	w.topic.Shutdown(ctx)
 }
 
 // Update calls the update callback of other instances to synchronize their policy.
@@ -110,4 +114,31 @@ func (w *Watcher) Update() error {
 	}
 	m := &pubsub.Message{Body: []byte("")}
 	return w.topic.Send(w.ctx, m)
+}
+
+// Close stops and releases the watcher, the callback function will not be called any more.
+func (w *Watcher) Close() {
+	finalizer(w)
+}
+
+func finalizer(w *Watcher) {
+	w.connMu.Lock()
+	defer w.connMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err := w.topic.Shutdown(ctx)
+	if err != nil {
+		log.Printf("Topic shutdown failed, error: %s\n", err)
+	}
+
+	err = w.sub.Shutdown(ctx)
+	if err != nil {
+		log.Printf("Subscription shutdown failed, error: %s\n", err)
+	}
+
+	w.topic = nil
+	w.sub = nil
+	w.callbackFunc = nil
 }
