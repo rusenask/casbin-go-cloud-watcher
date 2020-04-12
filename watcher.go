@@ -138,10 +138,6 @@ func finalizer(w *Watcher) {
 	defer cancel()
 
 	if w.topic != nil {
-		err := w.topic.Shutdown(ctx)
-		if err != nil {
-			log.Printf("Topic shutdown failed, error: %s\n", err)
-		}
 		w.topic = nil
 	}
 

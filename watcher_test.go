@@ -141,9 +141,6 @@ func TestWithEnforcerNATS(t *testing.T) {
 }
 
 func TestWithEnforcerMemory(t *testing.T) {
-	// Setup nats server
-	s := gnatsd.RunDefaultServer()
-	defer s.Shutdown()
 
 	endpointURL := "mem://topicA"
 
@@ -180,7 +177,50 @@ func TestWithEnforcerMemory(t *testing.T) {
 		if res != "enforcer" {
 			t.Fatalf("Got unexpected message :%v", res)
 		}
-	case <-time.After(time.Second * 10):
+	case <-time.After(time.Second * 5):
+		t.Fatal("The enforcer didn't send message in time")
+	}
+	close(cannel)
+}
+
+func TestWithEnforcerMemoryB(t *testing.T) {
+
+	endpointURL := "mem://topicA"
+
+	cannel := make(chan string, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w, err := New(ctx, endpointURL)
+	if err != nil {
+		t.Fatalf("Failed to create updater, error: %s", err)
+	}
+	defer w.Close()
+
+	// Initialize the enforcer.
+	e := casbin.NewEnforcer("./test_data/model.conf", "./test_data/policy.csv")
+
+	// Set the watcher for the enforcer.
+	e.SetWatcher(w)
+
+	// By default, the watcher's callback is automatically set to the
+	// enforcer's LoadPolicy() in the SetWatcher() call.
+	// We can change it by explicitly setting a callback.
+	w.SetUpdateCallback(func(msg string) {
+		cannel <- "enforcer"
+	})
+
+	// Update the policy to test the effect.
+	e.SavePolicy()
+
+	// Validate that listener received message
+	select {
+	case res := <-cannel:
+		if res != "enforcer" {
+			t.Fatalf("Got unexpected message :%v", res)
+		}
+	case <-time.After(time.Second * 5):
 		t.Fatal("The enforcer didn't send message in time")
 	}
 	close(cannel)
