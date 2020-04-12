@@ -10,6 +10,10 @@ import (
 	"github.com/casbin/casbin"
 	gnatsd "github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
+
+	// Enable inmemory and NATS drivers
+	_ "github.com/rusenask/casbin-go-cloud-watcher/drivers/mempubsub"
+	_ "github.com/rusenask/casbin-go-cloud-watcher/drivers/natspubsub"
 )
 
 func TestNATSWatcher(t *testing.T) {
