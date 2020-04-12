@@ -29,6 +29,8 @@ var (
 	ErrNotConnected = errors.New("pubsub not connected, cannot dispatch update message")
 )
 
+// Watcher implements Casbin updates watcher to synchronize policy changes
+// between the nodes
 type Watcher struct {
 	url          string
 	callbackFunc func(string)

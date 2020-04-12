@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/casbin/casbin"
 	gnatsd "github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
 )
@@ -44,6 +45,7 @@ func TestNATSWatcher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create second listener: %s", err)
 	}
+	defer listener.Close()
 
 	// listener should set a callback that gets called when policy changes
 	err = listener.SetUpdateCallback(func(msg string) {
@@ -86,4 +88,54 @@ func TestNATSWatcher(t *testing.T) {
 			break
 		}
 	}
+}
+
+func TestWithEnforcerNATS(t *testing.T) {
+	// Setup nats server
+	s := gnatsd.RunDefaultServer()
+	defer s.Shutdown()
+
+	natsEndpoint := fmt.Sprintf("nats://localhost:%d", nats.DefaultPort)
+	natsSubject := "nats://casbin-policy-updated-subject"
+
+	cannel := make(chan string, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// gocloud.dev connects to NATS server based on env variable
+	os.Setenv("NATS_SERVER_URL", natsEndpoint)
+
+	w, err := New(ctx, natsSubject)
+	if err != nil {
+		t.Fatalf("Failed to create updater, error: %s", err)
+	}
+	defer w.Close()
+
+	// Initialize the enforcer.
+	e := casbin.NewEnforcer("./test_data/model.conf", "./test_data/policy.csv")
+
+	// Set the watcher for the enforcer.
+	e.SetWatcher(w)
+
+	// By default, the watcher's callback is automatically set to the
+	// enforcer's LoadPolicy() in the SetWatcher() call.
+	// We can change it by explicitly setting a callback.
+	w.SetUpdateCallback(func(msg string) {
+		cannel <- "enforcer"
+	})
+
+	// Update the policy to test the effect.
+	e.SavePolicy()
+
+	// Validate that listener received message
+	select {
+	case res := <-cannel:
+		if res != "enforcer" {
+			t.Fatalf("Got unexpected message :%v", res)
+		}
+	case <-time.After(time.Second * 10):
+		t.Fatal("The enforcer didn't send message in time")
+	}
+	close(cannel)
 }
