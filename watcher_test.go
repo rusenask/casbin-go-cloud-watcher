@@ -183,6 +183,7 @@ func TestWithEnforcerMemory(t *testing.T) {
 	close(cannel)
 }
 
+// Ensure that we can still use the same topic name
 func TestWithEnforcerMemoryB(t *testing.T) {
 
 	endpointURL := "mem://topicA"
