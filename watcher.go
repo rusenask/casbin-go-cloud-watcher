@@ -89,10 +89,16 @@ func (w *Watcher) subscribeToUpdates(ctx context.Context) error {
 		for {
 			msg, err := sub.Receive(ctx)
 			if err != nil {
+				if ctx.Err() == context.Canceled {
+					// nothing to do
+					return
+				}
 				log.Printf("Error while receiving an update message: %s\n", err)
 				return
 			}
 			w.executeCallback(msg)
+
+			msg.Ack()
 		}
 	}()
 	return nil
@@ -131,17 +137,21 @@ func finalizer(w *Watcher) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := w.topic.Shutdown(ctx)
-	if err != nil {
-		log.Printf("Topic shutdown failed, error: %s\n", err)
+	if w.topic != nil {
+		err := w.topic.Shutdown(ctx)
+		if err != nil {
+			log.Printf("Topic shutdown failed, error: %s\n", err)
+		}
+		w.topic = nil
 	}
 
-	err = w.sub.Shutdown(ctx)
-	if err != nil {
-		log.Printf("Subscription shutdown failed, error: %s\n", err)
+	if w.sub != nil {
+		err := w.sub.Shutdown(ctx)
+		if err != nil {
+			log.Printf("Subscription shutdown failed, error: %s\n", err)
+		}
+		w.sub = nil
 	}
 
-	w.topic = nil
-	w.sub = nil
 	w.callbackFunc = nil
 }
